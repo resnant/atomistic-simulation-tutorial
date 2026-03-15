@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
 from types import SimpleNamespace
+import warnings
 
 from orb_models.forcefield import pretrained
 from orb_models.forcefield.inference.calculator import ORBCalculator
 
 
-pfp_api_client = SimpleNamespace(__version__="orb-models")
+try:
+    _orb_models_version = version("orb-models")
+except PackageNotFoundError:
+    _orb_models_version = "0.0.0"
+
+pfp_api_client = SimpleNamespace(__version__=_orb_models_version)
 
 
 class EstimatorCalcMode:
@@ -18,11 +25,20 @@ class EstimatorCalcMode:
 
 
 class Estimator:
-    def __init__(self, calc_mode: str = EstimatorCalcMode.PBE, model_version: str = "orb-v3", device: str = "cpu") -> None:
+    def __init__(self, calc_mode: str = EstimatorCalcMode.PBE, model_version: str = "v8.0.0", device: str = "cpu") -> None:
         self.calc_mode = calc_mode
         self.model_version = model_version
         self.device = device
-        self.orbff, self.atoms_adapter = pretrained.orb_v3_conservative_inf_omat(
+
+        model_loader = pretrained.orb_v3_conservative_inf_omat
+        if calc_mode == EstimatorCalcMode.WB97XD and hasattr(pretrained, "orb_v3_conservative_omol"):
+            model_loader = pretrained.orb_v3_conservative_omol
+        elif "omol" in model_version.lower() and hasattr(pretrained, "orb_v3_conservative_omol"):
+            model_loader = pretrained.orb_v3_conservative_omol
+        elif calc_mode == EstimatorCalcMode.PBE_U:
+            warnings.warn("EstimatorCalcMode.PBE_U uses the default Orb model in this compatibility layer.")
+
+        self.orbff, self.atoms_adapter = model_loader(
             device=device,
             precision="float32-high",
         )
@@ -34,8 +50,8 @@ class Estimator:
                     self.orbff,
                     AlchemiDFTD3(functional="PBE", damping="BJ", compile=False),
                 )
-            except Exception as exc:  # pragma: no cover
-                print(f"D3補正の初期化に失敗したため、D3なしで続行します: {exc}")
+            except (ImportError, RuntimeError) as exc:  # pragma: no cover
+                warnings.warn(f"D3 correction initialization failed; continuing without D3: {exc}")
 
 
 class ASECalculator(ORBCalculator):
